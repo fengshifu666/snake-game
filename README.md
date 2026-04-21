@@ -42,7 +42,6 @@ JSONBLOB_STORE_URL=https://jsonblob.com/api/jsonBlob/your-store-id
 SESSION_SECRET=replace-this-with-a-long-random-string
 ```
 
-如果你准备把仓库公开到 GitHub，建议先把 `JSONBLOB_STORE_URL` 和 `SESSION_SECRET` 配到环境变量里，再替换掉代码中的默认值。
 
 ## 技术栈
 
