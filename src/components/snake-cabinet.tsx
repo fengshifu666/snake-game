@@ -32,7 +32,6 @@ type SnakeCabinetProps = {
 const BOARD_SIZE = 18;
 const CELL_SIZE = 18;
 const CANVAS_SIZE = BOARD_SIZE * CELL_SIZE;
-const DIRECTION_ORDER: Direction[] = ["up", "left", "down", "right"];
 const CONTROL_LABELS: Record<Direction, string> = {
   up: "上",
   down: "下",
@@ -47,6 +46,19 @@ function isOpposite(left: Direction, right: Direction) {
     (left === "left" && right === "right") ||
     (left === "right" && right === "left")
   );
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, radius);
+  ctx.fill();
 }
 
 function createFood(snake: Point[]) {
@@ -133,70 +145,93 @@ function advanceGame(game: GameState): GameState {
   };
 }
 
-function drawGame(ctx: CanvasRenderingContext2D, game: GameState, bestScore: number) {
+function drawGame(ctx: CanvasRenderingContext2D, game: GameState) {
   ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-  ctx.fillStyle = "#08111e";
+  ctx.fillStyle = "#05070c";
   ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
   for (let y = 0; y < BOARD_SIZE; y += 1) {
     for (let x = 0; x < BOARD_SIZE; x += 1) {
-      ctx.fillStyle = (x + y) % 2 === 0 ? "#102239" : "#0c1b2f";
+      ctx.fillStyle = (x + y) % 2 === 0 ? "#0c1320" : "#08101b";
       ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE - 1, CELL_SIZE - 1);
     }
   }
 
-  ctx.fillStyle = "#ffd166";
-  ctx.shadowColor = "#ffd166";
-  ctx.shadowBlur = 10;
-  ctx.fillRect(
-    game.food.x * CELL_SIZE + 3,
-    game.food.y * CELL_SIZE + 3,
-    CELL_SIZE - 6,
-    CELL_SIZE - 6,
-  );
-
+  const foodX = game.food.x * CELL_SIZE;
+  const foodY = game.food.y * CELL_SIZE;
+  const pulse = 2 + ((game.score / 10) % 3) * 0.35;
+  ctx.shadowColor = "#f59e0b";
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = "#fbbf24";
+  ctx.beginPath();
+  ctx.arc(foodX + CELL_SIZE / 2, foodY + CELL_SIZE / 2, 4 + pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#fde68a";
+  ctx.beginPath();
+  ctx.arc(foodX + CELL_SIZE / 2, foodY + CELL_SIZE / 2, 2.5, 0, Math.PI * 2);
+  ctx.fill();
   ctx.shadowBlur = 0;
-  game.snake.forEach((segment, index) => {
-    ctx.fillStyle = index === 0 ? "#78f1cb" : "#1fcf9c";
-    ctx.fillRect(
-      segment.x * CELL_SIZE + 2,
-      segment.y * CELL_SIZE + 2,
-      CELL_SIZE - 4,
-      CELL_SIZE - 4,
-    );
-  });
 
-  ctx.fillStyle = "rgba(5, 10, 18, 0.78)";
-  ctx.fillRect(12, 12, 134, 42);
-  ctx.fillStyle = "#eff7f3";
-  ctx.font = "600 12px var(--font-mono)";
-  ctx.fillText(`SCORE ${game.score}`, 22, 30);
-  ctx.fillText(`BEST  ${bestScore}`, 22, 48);
+  game.snake.forEach((segment, index) => {
+    const x = segment.x * CELL_SIZE + 2;
+    const y = segment.y * CELL_SIZE + 2;
+    const size = CELL_SIZE - 4;
+
+    ctx.fillStyle = index === 0 ? "#f8fafc" : "#2dd4bf";
+    roundRect(ctx, x, y, size, size, index === 0 ? 7 : 6);
+
+    if (index === 0) {
+      ctx.fillStyle = "#0f172a";
+      const eyeX1 =
+        game.direction === "left" ? x + 4 : game.direction === "right" ? x + 10 : x + 5;
+      const eyeY1 =
+        game.direction === "up" ? y + 4 : game.direction === "down" ? y + 10 : y + 5;
+      const eyeX2 =
+        game.direction === "up" || game.direction === "down" ? eyeX1 + 4 : eyeX1;
+      const eyeY2 =
+        game.direction === "left" || game.direction === "right" ? eyeY1 + 4 : eyeY1;
+
+      ctx.beginPath();
+      ctx.arc(eyeX1, eyeY1, 1.3, 0, Math.PI * 2);
+      ctx.arc(eyeX2, eyeY2, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
 }
 
 export function SnakeCabinet({ user, onScoreCommitted }: SnakeCabinetProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const submittedRef = useRef(false);
+  const submittedScoresRef = useRef<Set<number>>(new Set());
   const [game, setGame] = useState<GameState>(() => createGameState());
-  const [hint, setHint] = useState("按方向键或按钮开始，撞墙即结束。");
+  const [hint, setHint] = useState("点击开始或使用方向键，碰撞后本局结束。");
   const [submitting, setSubmitting] = useState(false);
-  const speed = Math.max(80, 220 - (game.snake.length - 3) * 7);
+  const [latestBest, setLatestBest] = useState(user.bestScore);
+  const effectiveBest = Math.max(latestBest, user.bestScore);
+  const speed = Math.max(90, 220 - (game.snake.length - 3) * 7);
+  const statusLabel =
+    game.status === "running"
+      ? "进行中"
+      : game.status === "paused"
+        ? "已暂停"
+        : game.status === "over"
+          ? "已结束"
+          : "待开始";
   const statusMessage =
-    game.status === "over"
-      ? "游戏结束，重新开始可继续冲榜。"
-      : submitting
-        ? "正在提交分数..."
+    submitting && game.score > 0
+      ? "正在同步当前最高分..."
+      : game.status === "over"
+        ? "本局结束，重新开始后可继续挑战更高分。"
         : hint;
 
   function startGame(direction?: Direction) {
-    submittedRef.current = false;
+    submittedScoresRef.current.clear();
     const next = createGameState();
     setGame({
       ...next,
       direction: direction ?? next.direction,
       status: "running",
     });
-    setHint("吃掉金色能量块，分数会自动提交到排行榜。");
+    setHint("当你打出新的个人最高分时，系统会立刻同步到排行榜。");
   }
 
   function queueDirection(direction: Direction) {
@@ -217,7 +252,6 @@ export function SnakeCabinet({ user, onScoreCommitted }: SnakeCabinetProps) {
       return {
         ...current,
         queuedDirection: direction,
-        status: current.status === "paused" ? "running" : current.status,
       };
     });
   }
@@ -236,12 +270,12 @@ export function SnakeCabinet({ user, onScoreCommitted }: SnakeCabinetProps) {
     });
   }
 
-  const submitScore = useEffectEvent(async (score: number) => {
-    if (submittedRef.current || score <= 0) {
+  const syncScore = useEffectEvent(async (score: number) => {
+    if (score <= effectiveBest || submittedScoresRef.current.has(score)) {
       return;
     }
 
-    submittedRef.current = true;
+    submittedScoresRef.current.add(score);
     setSubmitting(true);
 
     try {
@@ -258,13 +292,15 @@ export function SnakeCabinet({ user, onScoreCommitted }: SnakeCabinetProps) {
         throw new Error(payload.error ?? "分数提交失败");
       }
 
+      setLatestBest((current) => Math.max(current, payload.bestScore));
       setHint(
         payload.accepted
-          ? `新纪录已保存，当前排名第 ${payload.rank}。`
-          : "本次分数未超过你的历史最佳。",
+          ? `新纪录已同步，当前排名第 ${payload.rank}。`
+          : "当前分数尚未超过你的历史最佳。",
       );
       onScoreCommitted(payload);
     } catch (error) {
+      submittedScoresRef.current.delete(score);
       setHint(error instanceof Error ? error.message : "分数提交失败");
     } finally {
       setSubmitting(false);
@@ -272,7 +308,7 @@ export function SnakeCabinet({ user, onScoreCommitted }: SnakeCabinetProps) {
   });
 
   const tick = useEffectEvent(() => {
-    let finishedScore = 0;
+    let nextScore = 0;
 
     setGame((current) => {
       if (current.status !== "running") {
@@ -280,17 +316,12 @@ export function SnakeCabinet({ user, onScoreCommitted }: SnakeCabinetProps) {
       }
 
       const next = advanceGame(current);
-
-      if (next.status === "over") {
-        finishedScore = next.score;
-      }
-
+      nextScore = next.score;
       return next;
     });
 
-    if (finishedScore > 0) {
-      setHint("游戏结束，正在提交分数...");
-      void submitScore(finishedScore);
+    if (nextScore > effectiveBest) {
+      void syncScore(nextScore);
     }
   });
 
@@ -341,84 +372,111 @@ export function SnakeCabinet({ user, onScoreCommitted }: SnakeCabinetProps) {
       return;
     }
 
-    drawGame(context, game, user.bestScore);
-  }, [game, user.bestScore]);
+    drawGame(context, game);
+  }, [game]);
 
   return (
-    <section className="panel flex flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="surface-card game-card">
+      <div className="section-head tight">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">
-            Arcade Station
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">
-            {user.username} 的蛇机
-          </h2>
+          <p className="eyebrow">Game Room</p>
         </div>
-        <div className="rounded-full border border-white/12 bg-white/6 px-4 py-2 text-right">
-          <p className="text-[11px] uppercase tracking-[0.28em] text-cyan-100/55">
-            Best
-          </p>
-          <p className="font-mono text-xl text-amber-300">{user.bestScore}</p>
+        <div className="status-pill">状态：{statusLabel}</div>
+      </div>
+
+      <div className="game-layout game-layout-tight">
+        <div className="game-board-wrap">
+          <div className="game-frame">
+            <canvas
+              ref={canvasRef}
+              width={CANVAS_SIZE}
+              height={CANVAS_SIZE}
+              className="game-canvas mx-auto w-full max-w-[680px] rounded-[24px] border border-white/6 bg-[#050912]"
+            />
+          </div>
+        </div>
+
+        <div className="game-sidebar">
+          <div className="stats-stack">
+            <div className="metric-card">
+              <span>玩家</span>
+              <strong>{user.username}</strong>
+            </div>
+            <div className="metric-card emphasis">
+              <span>当前分数</span>
+              <strong>{game.score}</strong>
+            </div>
+            <div className="metric-card">
+              <span>历史最高</span>
+              <strong>{effectiveBest}</strong>
+            </div>
+            <div className="metric-card">
+              <span>移动速度</span>
+              <strong>{Math.round(1000 / speed)} Hz</strong>
+            </div>
+          </div>
+
+          <div className="message-card">
+            <p className="text-sm leading-7 text-slate-300">{statusMessage}</p>
+          </div>
+
+          <div className="action-row">
+            <button className="primary-button flex-1" type="button" onClick={() => startGame()}>
+              开始新局
+            </button>
+            <button className="secondary-button flex-1" type="button" onClick={togglePause}>
+              {game.status === "paused" ? "继续" : "暂停"}
+            </button>
+          </div>
+
+          <div className="control-panel">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-medium text-slate-100">方向控制</p>
+              <span className="text-xs text-slate-500">支持键盘与点击</span>
+            </div>
+            <div className="mobile-dpad mt-4 grid grid-cols-3 gap-2">
+              <span />
+              <button className="control-button" type="button" onClick={() => queueDirection("up")}>
+                {CONTROL_LABELS.up}
+              </button>
+              <span />
+              <button className="control-button" type="button" onClick={() => queueDirection("left")}>
+                {CONTROL_LABELS.left}
+              </button>
+              <button className="control-button" type="button" onClick={() => queueDirection("down")}>
+                {CONTROL_LABELS.down}
+              </button>
+              <button className="control-button" type="button" onClick={() => queueDirection("right")}>
+                {CONTROL_LABELS.right}
+              </button>
+            </div>
+          </div>
+
+          <div className="message-card muted">
+            <p className="text-sm leading-7 text-slate-400">
+              使用方向键或 WASD 控制移动，空格键暂停。手机上也可以直接点击按钮操作，新的个人最好分会立即写入排行榜。
+            </p>
+          </div>
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-[28px] border border-white/12 bg-[#050c15] p-4 shadow-[0_28px_70px_rgba(3,9,18,0.45)]">
-        <div className="absolute inset-x-8 top-3 h-10 rounded-full bg-cyan-300/10 blur-2xl" />
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_SIZE}
-          height={CANVAS_SIZE}
-          className="relative mx-auto w-full max-w-[420px] rounded-[24px] border border-white/8 bg-[#07111d]"
-        />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-        <div className="rounded-[22px] border border-white/10 bg-white/5 px-4 py-3">
-          <p className="text-[11px] uppercase tracking-[0.28em] text-cyan-100/55">
-            Status
-          </p>
-          <p className="mt-2 text-sm text-slate-200">{statusMessage}</p>
-        </div>
-        <div className="flex gap-2">
-          <button className="action-button" onClick={() => startGame()}>
-            新开一局
+      <div className="mobile-gamepad">
+        <div className="mobile-gamepad-grid">
+          <span />
+          <button className="control-button mobile-control-button" type="button" onClick={() => queueDirection("up")}>
+            {CONTROL_LABELS.up}
           </button>
-          <button className="ghost-button" onClick={() => togglePause()}>
-            {game.status === "paused" ? "继续" : "暂停"}
+          <span />
+          <button className="control-button mobile-control-button" type="button" onClick={() => queueDirection("left")}>
+            {CONTROL_LABELS.left}
+          </button>
+          <button className="control-button mobile-control-button" type="button" onClick={() => queueDirection("down")}>
+            {CONTROL_LABELS.down}
+          </button>
+          <button className="control-button mobile-control-button" type="button" onClick={() => queueDirection("right")}>
+            {CONTROL_LABELS.right}
           </button>
         </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2 self-center">
-        <span />
-        <button className="control-key" onClick={() => queueDirection("up")}>
-          {CONTROL_LABELS.up}
-        </button>
-        <span />
-        <button className="control-key" onClick={() => queueDirection("left")}>
-          {CONTROL_LABELS.left}
-        </button>
-        <button className="control-key" onClick={() => queueDirection("down")}>
-          {CONTROL_LABELS.down}
-        </button>
-        <button className="control-key" onClick={() => queueDirection("right")}>
-          {CONTROL_LABELS.right}
-        </button>
-      </div>
-
-      <div className="rounded-[22px] border border-white/10 bg-[#091220] px-4 py-4">
-        <div className="flex items-center justify-between">
-          <p className="text-[11px] uppercase tracking-[0.28em] text-cyan-100/55">
-            Controls
-          </p>
-          <p className="font-mono text-sm text-cyan-100/70">
-            {DIRECTION_ORDER.map((direction) => CONTROL_LABELS[direction]).join(" / ")}
-          </p>
-        </div>
-        <p className="mt-2 text-sm text-slate-300">
-          键盘支持方向键与 WASD，空格键暂停。每吃到一个能量块得 10 分。
-        </p>
       </div>
     </section>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SnakeCabinet } from "@/components/snake-cabinet";
 import type { LeaderboardEntry, PublicUser } from "@/lib/types";
 
@@ -10,6 +10,22 @@ type HomeShellProps = {
 };
 
 type AuthMode = "login" | "register";
+
+type LeaderboardResponse = {
+  leaderboard: LeaderboardEntry[];
+};
+
+function formatSyncTime(value: string | null) {
+  if (!value) {
+    return "等待同步";
+  }
+
+  return `更新于 ${new Date(value).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })}`;
+}
 
 export function HomeShell({
   initialLeaderboard,
@@ -21,9 +37,83 @@ export function HomeShell({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState(
-    initialUser ? "继续冲榜吧。" : "登录后即可参与全站排行榜。",
+    initialUser ? "继续开始下一局，排行榜会自动同步。" : "登录后即可参与排行榜。",
   );
   const [pending, setPending] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(
+    initialLeaderboard.length > 0 ? new Date().toISOString() : null,
+  );
+
+  useEffect(() => {
+    let active = true;
+
+    async function refreshLeaderboard() {
+      setSyncing(true);
+
+      try {
+        const response = await fetch("/api/leaderboard", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error("排行榜同步失败");
+        }
+
+        const payload = (await response.json()) as LeaderboardResponse;
+
+        if (!active) {
+          return;
+        }
+
+        setLeaderboard(payload.leaderboard);
+        setLastSyncedAt(new Date().toISOString());
+        setUser((current) => {
+          if (!current) {
+            return current;
+          }
+
+          const latestEntry = payload.leaderboard.find(
+            (entry) => entry.username === current.username,
+          );
+
+          if (!latestEntry || latestEntry.bestScore <= current.bestScore) {
+            return current;
+          }
+
+          return {
+            ...current,
+            bestScore: latestEntry.bestScore,
+          };
+        });
+      } catch {
+        if (active) {
+          setLastSyncedAt(null);
+        }
+      } finally {
+        if (active) {
+          setSyncing(false);
+        }
+      }
+    }
+
+    void refreshLeaderboard();
+    const timer = window.setInterval(() => {
+      void refreshLeaderboard();
+    }, 5000);
+    const handleFocus = () => {
+      void refreshLeaderboard();
+    };
+
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, []);
 
   async function submitAuth(nextMode: AuthMode) {
     setPending(true);
@@ -49,7 +139,7 @@ export function HomeShell({
       setUser(payload.user);
       setUsername("");
       setPassword("");
-      setMessage(nextMode === "login" ? "登录成功，开始游戏。" : "注册完成，开始冲榜。");
+      setMessage(nextMode === "login" ? "登录成功，可以开始游戏了。" : "注册成功，准备冲榜。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "请求失败");
     } finally {
@@ -62,193 +152,271 @@ export function HomeShell({
     setMessage("正在退出...");
 
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", {
+        method: "POST",
+      });
       setUser(null);
-      setMessage("已退出，登录后可继续冲榜。");
+      setMessage("已退出登录。");
     } finally {
       setPending(false);
     }
   }
 
-  return (
-    <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8">
-      <section className="hero-grid">
-        <div className="panel relative overflow-hidden">
-          <div className="absolute -right-10 top-8 h-40 w-40 rounded-full bg-amber-400/18 blur-3xl" />
-          <div className="absolute -left-12 bottom-2 h-44 w-44 rounded-full bg-cyan-300/12 blur-3xl" />
-          <p className="relative text-xs uppercase tracking-[0.34em] text-cyan-200/65">
-            Snake Rush Arena
-          </p>
-          <h1 className="relative mt-4 max-w-2xl text-4xl font-semibold leading-tight text-white sm:text-5xl">
-            会登录、能冲榜、可公开访问的网页版贪吃蛇。
-          </h1>
-          <p className="relative mt-5 max-w-2xl text-base leading-8 text-slate-300 sm:text-lg">
-            这是一个偏街机厅气质的单页应用：注册账号后开始闯关，系统会自动记录你的历史最高分，并把最强玩家展示在全站排行榜里。
-          </p>
+  async function manualRefresh() {
+    setSyncing(true);
 
-          <div className="relative mt-7 flex flex-wrap gap-3">
-            <div className="stat-chip">
-              <span>全站排行</span>
-              <strong>{leaderboard.length || 0} 人上榜</strong>
-            </div>
-            <div className="stat-chip">
-              <span>游戏规则</span>
-              <strong>吃到能量块 +10</strong>
-            </div>
-            <div className="stat-chip">
-              <span>操作方式</span>
-              <strong>方向键 / WASD</strong>
-            </div>
-          </div>
+    try {
+      const response = await fetch("/api/leaderboard", {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("排行榜同步失败");
+      }
+
+      const payload = (await response.json()) as LeaderboardResponse;
+      setLeaderboard(payload.leaderboard);
+      setLastSyncedAt(new Date().toISOString());
+    } catch {
+      setLastSyncedAt(null);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <main className="mx-auto flex w-full max-w-[1480px] flex-1 flex-col gap-6 px-4 py-4 sm:px-6 lg:px-8 lg:py-6">
+      <div className="mobile-toolbar">
+        <button
+          className="secondary-button mobile-toolbar-button"
+          type="button"
+          onClick={() => setMobilePanelOpen(true)}
+        >
+          排行榜与账号
+        </button>
+      </div>
+
+      <section className="app-shell">
+        <div className="main-stage">
+          {user ? (
+            <SnakeCabinet
+              user={user}
+              onScoreCommitted={(payload) => {
+                setUser(payload.user);
+                setLeaderboard(payload.leaderboard);
+                setLastSyncedAt(new Date().toISOString());
+              }}
+            />
+          ) : (
+            <section className="surface-card">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Play</p>
+                  <h1 className="section-title">登录后开始游戏</h1>
+                </div>
+                <div className="status-pill">记录全站排行榜</div>
+              </div>
+
+              <div className="empty-stage">
+                <div className="empty-stage-grid">
+                  <div className="preview-card">
+                    <span>游戏规则</span>
+                    <strong>吃到果实 +10 分</strong>
+                    <p>撞墙或撞到自己时结束，系统会自动保存你的历史最佳成绩。</p>
+                  </div>
+                  <div className="preview-card">
+                    <span>同步方式</span>
+                    <strong>实时写入榜单</strong>
+                    <p>当你打出新的个人最高分时，会立刻提交，不必等到刷新页面。</p>
+                  </div>
+                  <div className="preview-card">
+                    <span>操作方式</span>
+                    <strong>键盘或点击</strong>
+                    <p>支持方向键、WASD 和屏幕按钮，桌面和移动端都能玩。</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
         </div>
 
-        <aside className="panel flex flex-col gap-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.34em] text-cyan-200/65">
-                Account
-              </p>
-              <h2 className="mt-2 text-2xl font-semibold text-white">
-                {user ? `你好，${user.username}` : mode === "login" ? "玩家登录" : "注册新玩家"}
-              </h2>
-            </div>
-            {user ? (
-              <button className="ghost-button" onClick={handleLogout} disabled={pending}>
-                退出
+        <aside className={`side-rail ${mobilePanelOpen ? "side-rail-open" : ""}`}>
+          <div
+            className="mobile-drawer-backdrop"
+            onClick={() => setMobilePanelOpen(false)}
+          />
+          <div className="mobile-drawer">
+            <div className="mobile-drawer-head">
+              <p className="eyebrow">Panel</p>
+              <button
+                className="secondary-button mobile-toolbar-button"
+                type="button"
+                onClick={() => setMobilePanelOpen(false)}
+              >
+                关闭
               </button>
-            ) : (
-              <div className="inline-flex rounded-full border border-white/10 bg-white/5 p-1">
-                <button
-                  className={mode === "login" ? "toggle-chip-active" : "toggle-chip"}
-                  onClick={() => setMode("login")}
-                  type="button"
-                >
-                  登录
-                </button>
-                <button
-                  className={mode === "register" ? "toggle-chip-active" : "toggle-chip"}
-                  onClick={() => setMode("register")}
-                  type="button"
-                >
-                  注册
-                </button>
-              </div>
-            )}
-          </div>
+            </div>
 
-          {user ? (
-            <div className="rounded-[24px] border border-white/10 bg-white/6 p-5">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="hud-card">
+          <section className="surface-card compact-card">
+            <div className="section-head tight">
+              <div>
+                <p className="eyebrow">Status</p>
+                <h2 className="panel-title">当前状态</h2>
+              </div>
+            </div>
+
+            <div className="stats-stack">
+              <div className="info-tile">
+                <span>当前上榜</span>
+                <strong>{leaderboard.length}</strong>
+              </div>
+              <div className="info-tile">
+                <span>同步状态</span>
+                <strong>{syncing ? "同步中" : "已连接"}</strong>
+              </div>
+              <div className="info-tile">
+                <span>操作方式</span>
+                <strong>方向键 / WASD</strong>
+              </div>
+            </div>
+          </section>
+
+          <section className="surface-card compact-card">
+            <div className="section-head tight">
+              <div>
+                <p className="eyebrow">Account</p>
+                <h2 className="panel-title">
+                  {user ? `你好，${user.username}` : mode === "login" ? "玩家登录" : "注册账号"}
+                </h2>
+              </div>
+              {user ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={handleLogout}
+                  disabled={pending}
+                >
+                  退出
+                </button>
+              ) : (
+                <div className="mode-toggle">
+                  <button
+                    className={mode === "login" ? "mode-toggle-active" : "mode-toggle-button"}
+                    type="button"
+                    onClick={() => setMode("login")}
+                  >
+                    登录
+                  </button>
+                  <button
+                    className={mode === "register" ? "mode-toggle-active" : "mode-toggle-button"}
+                    type="button"
+                    onClick={() => setMode("register")}
+                  >
+                    注册
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {user ? (
+              <div className="stats-stack mt-5">
+                <div className="metric-card">
                   <span>历史最高</span>
                   <strong>{user.bestScore}</strong>
                 </div>
-                <div className="hud-card">
+                <div className="metric-card">
                   <span>最近登录</span>
                   <strong>{new Date(user.lastLoginAt).toLocaleDateString("zh-CN")}</strong>
                 </div>
               </div>
-              <p className="mt-4 text-sm leading-7 text-slate-300">{message}</p>
-            </div>
-          ) : (
-            <form
-              className="rounded-[24px] border border-white/10 bg-white/6 p-5"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitAuth(mode);
-              }}
-            >
-              <label className="field-label" htmlFor="username">
-                用户名
-              </label>
-              <input
-                id="username"
-                className="field-input"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="仅限字母、数字、下划线"
-              />
+            ) : (
+              <form
+                className="mt-5 space-y-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitAuth(mode);
+                }}
+              >
+                <div>
+                  <label className="field-label" htmlFor="username">
+                    用户名
+                  </label>
+                  <input
+                    id="username"
+                    className="field-input"
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    placeholder="3-16 位字母、数字或下划线"
+                    autoComplete="username"
+                  />
+                </div>
+                <div>
+                  <label className="field-label" htmlFor="password">
+                    密码
+                  </label>
+                  <input
+                    id="password"
+                    className="field-input"
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="6-32 位"
+                    autoComplete={mode === "login" ? "current-password" : "new-password"}
+                  />
+                </div>
+                <button className="primary-button w-full" disabled={pending} type="submit">
+                  {pending ? "处理中..." : mode === "login" ? "登录" : "创建账号"}
+                </button>
+              </form>
+            )}
 
-              <label className="field-label mt-4" htmlFor="password">
-                密码
-              </label>
-              <input
-                id="password"
-                className="field-input"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="6 位以上"
-              />
+            <p className="side-note">{message}</p>
+          </section>
 
-              <button className="action-button mt-5 w-full" disabled={pending} type="submit">
-                {pending ? "处理中..." : mode === "login" ? "立即登录" : "创建账号"}
-              </button>
-
-              <p className="mt-4 text-sm leading-7 text-slate-300">{message}</p>
-            </form>
-          )}
-
-          <div className="rounded-[24px] border border-white/10 bg-[#091220] p-5">
-            <div className="flex items-center justify-between">
+          <section className="surface-card compact-card">
+            <div className="section-head tight">
               <div>
-                <p className="text-xs uppercase tracking-[0.34em] text-cyan-200/65">
-                  Leaderboard
-                </p>
-                <h3 className="mt-2 text-xl font-semibold text-white">全站排行榜</h3>
+                <p className="eyebrow">Leaderboard</p>
+                <h2 className="panel-title">实时排行榜</h2>
               </div>
-              <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 font-mono text-sm text-amber-200">
-                TOP 12
-              </span>
+              <button className="secondary-button" type="button" onClick={() => void manualRefresh()}>
+                刷新
+              </button>
             </div>
 
-            <div className="mt-4 flex flex-col gap-3">
+            <div className="sync-strip">
+              <span>{formatSyncTime(lastSyncedAt)}</span>
+              <span>{syncing ? "自动同步中" : "5 秒轮询"}</span>
+            </div>
+
+            <div className="leaderboard-stack">
               {leaderboard.length > 0 ? (
                 leaderboard.map((entry, index) => (
-                  <div key={entry.username} className="leaderboard-row">
-                    <div className="flex items-center gap-3">
-                      <span className="rank-dot">{String(index + 1).padStart(2, "0")}</span>
+                  <div key={entry.username} className="leaderboard-item">
+                    <div className="flex items-center gap-4">
+                      <span className="leaderboard-rank">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
                       <div>
-                        <p className="text-sm text-slate-100">{entry.username}</p>
-                        <p className="text-xs text-cyan-100/50">
-                          {new Date(entry.updatedAt).toLocaleDateString("zh-CN")}
+                        <p className="text-sm font-medium text-slate-100">{entry.username}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {new Date(entry.updatedAt).toLocaleString("zh-CN")}
                         </p>
                       </div>
                     </div>
-                    <strong className="font-mono text-lg text-amber-300">
-                      {entry.bestScore}
-                    </strong>
+                    <strong className="font-mono text-lg text-amber-200">{entry.bestScore}</strong>
                   </div>
                 ))
               ) : (
-                <p className="rounded-[20px] border border-dashed border-white/10 px-4 py-5 text-sm leading-7 text-slate-300">
-                  现在还没有玩家上榜。注册后玩一局，你就是第一名。
-                </p>
+                <div className="empty-state">
+                  还没有玩家上榜。完成一局游戏后，这里会自动出现最新成绩。
+                </div>
               )}
             </div>
+          </section>
           </div>
         </aside>
       </section>
-
-      {user ? (
-        <SnakeCabinet
-          user={user}
-          onScoreCommitted={(payload) => {
-            setUser(payload.user);
-            setLeaderboard(payload.leaderboard);
-          }}
-        />
-      ) : (
-        <section className="panel border-dashed border-white/12 bg-white/4 text-center">
-          <p className="text-xs uppercase tracking-[0.34em] text-cyan-200/65">
-            Game Access
-          </p>
-          <h2 className="mt-3 text-2xl font-semibold text-white">登录后解锁游戏机</h2>
-          <p className="mx-auto mt-3 max-w-2xl text-base leading-8 text-slate-300">
-            当前版本把注册、登录与排行榜都接到真实的服务端存储里，因此需要先创建账号，才能提交分数并进入公开排名。
-          </p>
-        </section>
-      )}
     </main>
   );
 }
